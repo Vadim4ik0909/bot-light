@@ -56,7 +56,7 @@ def get_settings_inline_keyboard(user_settings: dict) -> InlineKeyboardMarkup:
     notify_restore = "✅ Увімкнено" if user_settings.get("notify_restore", 1) else "❌ Вимкнено"
     notify_change = "✅ Увімкнено" if user_settings.get("notify_schedule_change", 1) else "❌ Вимкнено"
     quiet_night = "🌙 Без звуку" if user_settings.get("quiet_night", 1) else "🔔 Зі звуком"
-    daily_digest = "✅ Увімкнено" if user_settings.get("daily_digest", 1) else "❌ Вимкнено"
+    daily_digest = "✅ Увімкнено" if user_settings.get("daily_digest", 0) else "❌ Вимкнено"
 
     warning_mins = user_settings.get("notify_warning", 15)
     if warning_mins == 15:

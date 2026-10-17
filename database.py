@@ -22,7 +22,7 @@ class Database:
                     notify_warning INTEGER DEFAULT 15,
                     notify_schedule_change INTEGER DEFAULT 1,
                     quiet_night INTEGER DEFAULT 1,
-                    daily_digest INTEGER DEFAULT 1,
+                    daily_digest INTEGER DEFAULT 0,
                     pinned_message_id INTEGER DEFAULT NULL,
                     last_status_message_id INTEGER DEFAULT NULL,
                     is_active INTEGER DEFAULT 1,
@@ -40,7 +40,7 @@ class Database:
             # Run safe migrations for existing tables
             migrations = [
                 ("quiet_night", "INTEGER DEFAULT 1"),
-                ("daily_digest", "INTEGER DEFAULT 1"),
+                ("daily_digest", "INTEGER DEFAULT 0"),
                 ("pinned_message_id", "INTEGER DEFAULT NULL"),
                 ("last_status_message_id", "INTEGER DEFAULT NULL"),
             ]
@@ -49,6 +49,12 @@ class Database:
                     await db.execute(f"ALTER TABLE subscribers ADD COLUMN {col_name} {col_type};")
                 except Exception:
                     pass  # column already exists
+
+            # Disable daily_digest by default for existing subscribers who haven't explicitly set it
+            migration_done = await self.get_state("daily_digest_default_migrated")
+            if not migration_done:
+                await db.execute("UPDATE subscribers SET daily_digest = 0;")
+                await self.set_state("daily_digest_default_migrated", "1")
 
             await db.commit()
         logger.info("Database initialized successfully with migrations.")

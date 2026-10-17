@@ -73,6 +73,24 @@ async def main():
     # Start notifier background task
     notifier_task = asyncio.create_task(notifier_service.start())
 
+    # Keep-alive background task: pings itself every 10 min to prevent Render Free Tier from sleeping
+    async def keep_alive():
+        service_url = os.getenv("RENDER_EXTERNAL_URL", "https://bot-light-44ib.onrender.com").rstrip("/")
+        health_url = f"{service_url}/health"
+        logger.info(f"Keep-alive self-ping configured for: {health_url}")
+        await asyncio.sleep(60)  # Wait 1 minute after initial boot
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    async with session.get(health_url, timeout=15) as resp:
+                        logger.info(f"Keep-alive ping to {health_url}: status {resp.status}")
+                except Exception as e:
+                    logger.warning(f"Keep-alive ping error: {e}")
+                await asyncio.sleep(600)  # 10 minutes (Render timeout is 15 min)
+
+    keep_alive_task = asyncio.create_task(keep_alive())
+
     try:
         logger.info(
             f"Starting bot for address: {config.CITY_NAME}, {config.STREET_NAME}, {config.BUILDING_NAME} (queue {config.CHER_GPV})"
@@ -82,6 +100,7 @@ async def main():
         logger.info("Stopping bot and services...")
         notifier_service.stop()
         notifier_task.cancel()
+        keep_alive_task.cancel()
         await api_client.close()
         await bot.session.close()
         logger.info("Bot successfully stopped.")
