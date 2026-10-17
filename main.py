@@ -56,6 +56,20 @@ async def main():
     await set_commands(bot)
     logger.info("Bot commands registered.")
 
+    # Start lightweight health check HTTP server (for Render / cloud healthchecks)
+    import os
+    from aiohttp import web
+
+    health_app = web.Application()
+    health_app.router.add_get("/", lambda r: web.Response(text="Bot is running!"))
+    health_app.router.add_get("/health", lambda r: web.Response(text="OK"))
+    runner = web.AppRunner(health_app)
+    await runner.setup()
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health check server listening on port {port}")
+
     # Start notifier background task
     notifier_task = asyncio.create_task(notifier_service.start())
 
