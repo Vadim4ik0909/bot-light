@@ -118,29 +118,55 @@ class NotifierService:
 
         times = today_sched.get("times", {})
 
-        # --- 1. Check Schedule Update Hash ---
-        raw_signature = json.dumps({
-            "today_dateCreate": today_graph.get("dateCreate"),
-            "today_times": times,
-            "tomorrow_dateCreate": tomorrow_graph.get("dateCreate") if tomorrow_graph else None,
-            "tomorrow_times": tomorrow_graph.get("dataJson", {}).get(config.CHER_GPV, {}).get("times") if tomorrow_graph else None
-        }, sort_keys=True)
-        current_hash = hashlib.md5(raw_signature.encode("utf-8")).hexdigest()
+        # --- 1. Check Schedule Updates (Compare ONLY actual timeslots for queue 2.1, NOT dateCreate) ---
+        today_hash = hashlib.md5(json.dumps(times, sort_keys=True).encode("utf-8")).hexdigest()
+        saved_today_hash = await db.get_state(f"today_times_hash_{today_str}")
 
-        saved_hash = await db.get_state("schedule_hash")
-        if saved_hash is None:
-            await db.set_state("schedule_hash", current_hash)
-        elif saved_hash != current_hash:
-            logger.info("Schedule updated on site! Broadcasting notification...")
-            await db.set_state("schedule_hash", current_hash)
+        if saved_today_hash is None:
+            await db.set_state(f"today_times_hash_{today_str}", today_hash)
+        elif saved_today_hash != today_hash:
+            logger.info("Today's timeslots actually changed! Broadcasting notification...")
+            await db.set_state(f"today_times_hash_{today_str}", today_hash)
             
             schedule_text = ScheduleParser.format_schedule_text(today_sched, "сьогодні (ОНОВЛЕНО)")
             msg = (
-                "🔄 <b>Оновлено графік відключень на сьогодні!</b>\n"
+                "🔄 <b>Оновлено години відключень на сьогодні!</b>\n"
                 f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
                 f"{schedule_text}"
             )
             await self.broadcast(msg, filter_key="notify_schedule_change")
+
+        # Check tomorrow's timeslots if published or updated
+        tomorrow_times = tomorrow_graph.get("dataJson", {}).get(config.CHER_GPV, {}).get("times") if tomorrow_graph else None
+        if tomorrow_times:
+            tomorrow_date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+            tomorrow_hash = hashlib.md5(json.dumps(tomorrow_times, sort_keys=True).encode("utf-8")).hexdigest()
+            saved_tomorrow_hash = await db.get_state(f"tomorrow_times_hash_{tomorrow_date}")
+
+            if saved_tomorrow_hash is None:
+                # First time tomorrow's schedule is published
+                await db.set_state(f"tomorrow_times_hash_{tomorrow_date}", tomorrow_hash)
+                tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV)
+                if tomorrow_sched:
+                    schedule_text = ScheduleParser.format_schedule_text(tomorrow_sched, "завтра (НОВИЙ)")
+                    msg = (
+                        "📆 <b>Оприлюднено графік відключень на завтра!</b>\n"
+                        f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                        f"{schedule_text}"
+                    )
+                    await self.broadcast(msg, filter_key="notify_schedule_change")
+            elif saved_tomorrow_hash != tomorrow_hash:
+                # Tomorrow's schedule changed
+                await db.set_state(f"tomorrow_times_hash_{tomorrow_date}", tomorrow_hash)
+                tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV)
+                if tomorrow_sched:
+                    schedule_text = ScheduleParser.format_schedule_text(tomorrow_sched, "завтра (ОНОВЛЕНО)")
+                    msg = (
+                        "🔄 <b>Оновлено графік відключень на завтра!</b>\n"
+                        f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                        f"{schedule_text}"
+                    )
+                    await self.broadcast(msg, filter_key="notify_schedule_change")
 
         # --- 2. Check Real-Time Status Transitions ---
         current_status_info = ScheduleParser.get_current_status(times, now)
