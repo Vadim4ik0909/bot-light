@@ -28,8 +28,13 @@ class NotifierService:
 
     async def broadcast(self, message: str, filter_key: Optional[str] = None):
         """
-        Sends message to all active subscribers, checking individual user preferences.
+        Sends message to all active subscribers, checking individual user preferences
+        and applying quiet night mode if active (23:00 - 07:00).
         """
+        tz = ZoneInfo(config.TIMEZONE)
+        now = datetime.now(tz)
+        is_night = (now.hour >= 23 or now.hour < 7)
+
         subscribers = await db.get_active_subscribers()
         for sub in subscribers:
             chat_id = sub["chat_id"]
@@ -38,11 +43,17 @@ class NotifierService:
                 if not sub.get(filter_key, 1):
                     continue
 
+            # Determine silent notification for quiet night mode
+            silent = False
+            if is_night and sub.get("quiet_night", 1):
+                silent = True
+
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=message,
                     parse_mode="HTML",
+                    disable_notification=silent,
                     disable_web_page_preview=True
                 )
                 await asyncio.sleep(0.05)  # Telegram broadcast throttle
@@ -54,12 +65,31 @@ class NotifierService:
             except Exception as e:
                 logger.error(f"Error sending message to {chat_id}: {e}")
 
+    async def update_pinned_messages(self, status_text: str):
+        """
+        Updates pinned live status message for subscribers who have enabled it.
+        """
+        subscribers = await db.get_active_subscribers()
+        for sub in subscribers:
+            pinned_id = sub.get("pinned_message_id")
+            if pinned_id:
+                try:
+                    await self.bot.edit_message_text(
+                        chat_id=sub["chat_id"],
+                        message_id=pinned_id,
+                        text=status_text,
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
     async def check_for_updates(self):
         """
         Main check cycle run periodically:
         1. Checks schedule changes on poweron.toe.com.ua
         2. Checks transition events (outage started / power restored)
         3. Checks advance warnings (e.g. 15 min before outage)
+        4. Sends morning digest at 08:00
         """
         tz = ZoneInfo(config.TIMEZONE)
         now = datetime.now(tz)
@@ -99,7 +129,6 @@ class NotifierService:
 
         saved_hash = await db.get_state("schedule_hash")
         if saved_hash is None:
-            # First run, just save hash
             await db.set_state("schedule_hash", current_hash)
         elif saved_hash != current_hash:
             logger.info("Schedule updated on site! Broadcasting notification...")
@@ -107,9 +136,9 @@ class NotifierService:
             
             schedule_text = ScheduleParser.format_schedule_text(today_sched, "сьогодні (ОНОВЛЕНО)")
             msg = (
-                "🔄 <b>УВАГА! ОНОВЛЕНО ГРАФІК ВІДКЛЮЧЕНЬ!</b>\n\n"
-                f"{schedule_text}\n\n"
-                "ℹ️ <i>Перевірте актуальні години відключень на сьогодні.</i>"
+                "🔄 <b>Оновлено графік відключень на сьогодні!</b>\n"
+                f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                f"{schedule_text}"
             )
             await self.broadcast(msg, filter_key="notify_schedule_change")
 
@@ -123,20 +152,20 @@ class NotifierService:
         last_status = await db.get_state(last_status_key)
 
         if last_status is None:
-            # Initialize for today
             await db.set_state(last_status_key, current_status)
         elif last_status != current_status:
-            # Status has changed!
             await db.set_state(last_status_key, current_status)
 
             # A) Transition to OUTAGE (🔴 1)
             if current_status == STATUS_OFF:
                 end_time = curr_interval["end"] if curr_interval else "кінця інтервалу"
+                dur_min = (curr_interval["end_minutes"] - curr_interval["start_minutes"]) if curr_interval else 0
+                dur_str = f"на {dur_min//60} год" if dur_min % 60 == 0 else f"на {dur_min//60} год {dur_min%60} хв"
+
                 msg = (
-                    "🔴 <b>УВАГА! ВІДКЛЮЧЕННЯ СВІТЛА РОЗПОЧАЛОСЯ</b>\n\n"
-                    f"📍 <b>Адреса:</b> м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
-                    f"⚡️ <b>Черга:</b> {config.CHER_GPV}\n\n"
-                    f"⏳ Згідно з графіком, електроенергія буде відсутня <b>до {end_time}</b>."
+                    f"🔴 <b>Світло вимкнено до {end_time}</b> ({dur_str})\n"
+                    f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                    f"⏳ Згідно з графіком, електроенергія буде відсутня до <b>{end_time}</b>."
                 )
                 await self.broadcast(msg, filter_key="notify_outage")
 
@@ -144,15 +173,14 @@ class NotifierService:
             elif current_status == STATUS_ON and last_status in (STATUS_OFF, STATUS_MAYBE):
                 next_outage_msg = ""
                 if next_interval and next_interval["status"] == STATUS_OFF:
-                    next_outage_msg = f"\n⏳ Наступне планове відключення: <b>о {next_interval['start']}</b>."
+                    next_outage_msg = f" (наступне вимкнення о {next_interval['start']})"
                 elif next_interval and next_interval["status"] == STATUS_MAYBE:
-                    next_outage_msg = f"\n⏳ Наступне можливе відключення: <b>о {next_interval['start']}</b>."
+                    next_outage_msg = f" (можливе вимкнення о {next_interval['start']})"
 
                 msg = (
-                    "🟢 <b>СВІТЛО УВІМКНЕНО!</b>\n\n"
-                    f"📍 <b>Адреса:</b> м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
-                    f"⚡️ <b>Черга:</b> {config.CHER_GPV}\n\n"
-                    f"💡 Електропостачання відновлено.{next_outage_msg}"
+                    f"🟢 <b>Світло увімкнено!</b>{next_outage_msg}\n"
+                    f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                    f"💡 Електропостачання відновлено за графіком."
                 )
                 await self.broadcast(msg, filter_key="notify_restore")
 
@@ -160,10 +188,9 @@ class NotifierService:
             elif current_status == STATUS_MAYBE and last_status == STATUS_ON:
                 end_time = curr_interval["end"] if curr_interval else "кінця інтервалу"
                 msg = (
-                    "🟡 <b>ПОЧАВСЯ ПЕРІОД МОЖЛИВОГО ВІДКЛЮЧЕННЯ</b>\n\n"
-                    f"📍 <b>Адреса:</b> м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
-                    f"⚡️ <b>Черга:</b> {config.CHER_GPV}\n\n"
-                    f"⚠️ В період <b>з {curr_interval['start']} до {end_time}</b> можливе вимкнення світла у разі дефіциту потужності."
+                    f"🟡 <b>Період можливого відключення до {end_time}</b>\n"
+                    f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                    f"⚠️ З <b>{curr_interval['start']}</b> до <b>{end_time}</b> можливе відключення у разі перевищення лімітів."
                 )
                 await self.broadcast(msg, filter_key="notify_outage")
 
@@ -172,43 +199,50 @@ class NotifierService:
         curr_minutes = now.hour * 60 + now.minute
 
         subscribers = await db.get_active_subscribers()
+        is_night = (now.hour >= 23 or now.hour < 7)
+
         for sub in subscribers:
             warn_mins = sub.get("notify_warning", 15)
             if not warn_mins or warn_mins <= 0:
                 continue
 
-            target_minutes = curr_minutes + warn_mins
-
-            # Look for an interval that starts around target_minutes
             for inter in intervals:
                 if inter["status"] in (STATUS_OFF, STATUS_MAYBE):
-                    # Check if interval starts in exactly warn_mins (or within [warn_mins-1, warn_mins+1])
                     diff = inter["start_minutes"] - curr_minutes
                     if 0 < diff <= warn_mins:
-                        # Check if we already sent warning for this chat and this interval
                         warn_state_key = f"warn_{sub['chat_id']}_{today_str}_{inter['start']}"
                         already_sent = await db.get_state(warn_state_key)
                         if not already_sent:
                             await db.set_state(warn_state_key, "1")
                             
-                            status_title = "відключення електроенергії" if inter["status"] == STATUS_OFF else "можливе відключення світла"
+                            status_title = "відключення" if inter["status"] == STATUS_OFF else "можливе вимкнення"
                             emoji = "⚠️" if inter["status"] == STATUS_OFF else "🟡"
                             
                             warning_msg = (
-                                f"{emoji} <b>ПОПЕРЕДЖЕННЯ: {diff} ХВ ДО ВІДКЛЮЧЕННЯ!</b>\n\n"
-                                f"📍 <b>Адреса:</b> м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
-                                f"⚡️ <b>Черга:</b> {config.CHER_GPV}\n\n"
-                                f"О <b>{inter['start']}</b> планується {status_title} (орієнтовно до <b>{inter['end']}</b>).\n\n"
-                                f"🔌 <i>Будь ласка, перевірте заряд акумуляторів та вимкніть чутливі електроприлади!</i>"
+                                f"{emoji} <b>Через {diff} хв {status_title} світла (до {inter['end']})</b>\n"
+                                f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                                f"О <b>{inter['start']}</b> планується вимкнення до <b>{inter['end']}</b>.\n"
+                                f"🔌 <i>Встигніть зарядити пристрої та закінчити справи!</i>"
                             )
+                            silent = is_night and sub.get("quiet_night", 1)
                             try:
                                 await self.bot.send_message(
                                     chat_id=sub["chat_id"],
                                     text=warning_msg,
-                                    parse_mode="HTML"
+                                    parse_mode="HTML",
+                                    disable_notification=silent
                                 )
                             except Exception as e:
                                 logger.error(f"Failed to send warning to {sub['chat_id']}: {e}")
+
+        # --- 4. Morning Digest at 08:00 ---
+        if now.hour == 8 and now.minute <= 2:
+            digest_state_key = f"digest_sent_{today_str}"
+            already_sent = await db.get_state(digest_state_key)
+            if not already_sent:
+                await db.set_state(digest_state_key, "1")
+                digest_text = ScheduleParser.format_daily_digest(today_sched)
+                await self.broadcast(digest_text, filter_key="daily_digest")
 
     async def start(self):
         """

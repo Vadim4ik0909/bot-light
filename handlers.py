@@ -35,7 +35,7 @@ async def build_status_message() -> str:
     if not schedule_members:
         return (
             "⚠️ <b>Тимчасово не вдалося отримати дані з сайту обленерго.</b>\n\n"
-            "Спробуйте натиснути кнопку «🔄 Оновити» через кілька хвилин."
+            "Спробуйте натиснути кнопку «🔄 Оновити зараз» через хвилину."
         )
 
     # Find today's schedule
@@ -50,8 +50,8 @@ async def build_status_message() -> str:
     today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV)
     if not today_sched:
         return (
-            "ℹ️ <b>На сьогодні інформація про чергу відсутня.</b>\n"
-            "Можливо, графіки погодинних відключень не застосовуються."
+            "ℹ️ <b>На сьогодні інформація про відключення відсутня.</b>\n"
+            "Світло має бути постійно 🟢"
         )
 
     times = today_sched.get("times", {})
@@ -61,49 +61,49 @@ async def build_status_message() -> str:
     next_interval = status_info["next_interval"]
     curr_status = status_info["status"]
 
-    if curr_status == STATUS_OFF:
-        status_header = "🔴 <b>ЗАРАЗ ЗА ГРАФІКОМ СВІТЛА НЕМАЄ</b>"
-    elif curr_status == STATUS_MAYBE:
-        status_header = "🟡 <b>ЗАРАЗ ПЕРІОД МОЖЛИВОГО ВІДКЛЮЧЕННЯ</b>"
-    else:
-        status_header = "🟢 <b>ЗАРАЗ ЗА ГРАФІКОМ СВІТЛО Є</b>"
-
-    interval_str = f"{curr_interval['start']} — {curr_interval['end']}" if curr_interval else "поточний час"
     mins_left = status_info["minutes_remaining"]
     hours_left = mins_left // 60
     rem_mins = mins_left % 60
     time_left_str = f"{hours_left} год {rem_mins} хв" if hours_left > 0 else f"{rem_mins} хв"
+
+    if curr_status == STATUS_OFF:
+        status_header = f"🔴 <b>СВІТЛА НЕМАЄ</b> (до {curr_interval['end']})"
+    elif curr_status == STATUS_MAYBE:
+        status_header = f"🟡 <b>МОЖЛИВЕ ВІДКЛЮЧЕННЯ</b> (до {curr_interval['end']})"
+    else:
+        status_header = "🟢 <b>СВІТЛО Є</b>"
+
+    interval_str = f"{curr_interval['start']} — {curr_interval['end']}" if curr_interval else "поточний час"
 
     next_msg = ""
     if next_interval:
         next_label = next_interval["label"]
         next_emoji = next_interval["emoji"]
         next_msg = (
-            f"\n\n⏭ <b>Наступна зміна режиму:</b>\n"
+            f"\n\n⏭ <b>Наступна зміна:</b>\n"
             f"О <b>{next_interval['start']}</b>: {next_emoji} {next_label}\n"
-            f"Залишилось часу: <b>{time_left_str}</b>"
+            f"⏳ Залишилось: <b>{time_left_str}</b>"
         )
     else:
-        next_msg = f"\n\nПоточний інтервал триватиме до <b>{curr_interval['end']}</b> (залишилось {time_left_str})."
+        next_msg = f"\n\nПоточний режим діє до <b>{curr_interval['end']}</b> (залишилось {time_left_str})."
 
-    # Quick overview of outages for today
+    # Overview of outages today
     intervals = ScheduleParser.get_intervals(times)
     off_intervals = [i for i in intervals if i["status"] == STATUS_OFF]
-    today_outages_summary = ""
     if off_intervals:
         ranges = ", ".join([f"{i['start']}-{i['end']}" for i in off_intervals])
-        today_outages_summary = f"\n\n⚡️ <b>Всі відключення сьогодні:</b> {ranges}"
+        today_outages_summary = f"\n\n⚡️ <b>Вимкнення сьогодні:</b> <b>{ranges}</b>"
     else:
         today_outages_summary = "\n\n🎉 <i>Сьогодні вимкнень більше не заплановано!</i>"
 
     msg = (
         f"{status_header}\n\n"
-        f"📍 <b>Адреса:</b> м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
-        f"⚡️ <b>Черга ГПВ:</b> {config.CHER_GPV}\n"
-        f"🕒 <b>Поточний час:</b> {now.strftime('%H:%M')} (інтервал {interval_str})"
+        f"📍 <b>Адреса:</b> вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
+        f"⚡️ <b>Черга:</b> {config.CHER_GPV}\n"
+        f"🕒 <b>Зараз:</b> {now.strftime('%H:%M')} (період {interval_str})"
         f"{next_msg}"
         f"{today_outages_summary}\n\n"
-        f"<i>Дані синхронізовано з poweron.toe.com.ua</i>"
+        f"<i>Синхронізовано з poweron.toe.com.ua</i>"
     )
     return msg
 
@@ -118,25 +118,38 @@ async def cmd_start(message: Message):
 
     greeting = (
         f"👋 <b>Вітаю, {first_name}!</b>\n\n"
-        f"Цей бот відстежує актуальні графіки відключення та включення світла для адреси:\n"
-        f"📍 <b>м. {config.CITY_NAME} ({config.OTG_NAME}), {config.STREET_NAME}, буд. {config.BUILDING_NAME}</b>\n"
+        f"Бот моніторить відключення та включення світла для:\n"
+        f"📍 <b>м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}</b>\n"
         f"⚡️ <b>Черга ГПВ:</b> <b>{config.CHER_GPV}</b>\n\n"
         f"🔔 <b>Ви автоматично підписані на сповіщення:</b>\n"
-        f"• 🔴 Коли вимикають світло\n"
-        f"• 🟢 Коли світло вмикається\n"
-        f"• ⚠️ За 15 хвилин до запланованого відключення\n"
-        f"• 🔄 При зміні чи оновленні графіка на сайті\n\n"
-        f"👇 Оберіть пункт меню нижче:"
+        f"• 🔴 Початок вимкнення\n"
+        f"• 🟢 Включення світла\n"
+        f"• ⚠️ За 15 хв до відключення\n"
+        f"• ☕️ Ранкове зведення о 08:00\n"
+        f"• 🌙 Тихий режим уночі (без звуку з 23:00 до 07:00)\n\n"
+        f"👇 Оберіть дію в меню:"
     )
 
     await message.answer(greeting, reply_markup=get_main_reply_keyboard(), parse_mode="HTML")
     status_text = await build_status_message()
-    await message.answer(status_text, reply_markup=get_status_inline_keyboard(), parse_mode="HTML")
+    sent_msg = await message.answer(status_text, reply_markup=get_status_inline_keyboard(), parse_mode="HTML")
+    await db.update_setting(chat_id, "last_status_message_id", sent_msg.message_id)
 
 @router.message(F.text.in_({"💡 Поточний стан", "/status", "/now"}))
 async def handle_status(message: Message):
+    chat_id = message.chat.id
+    sub = await db.get_subscriber(chat_id)
+
+    # Clean up previous status message to keep chat tidy
+    if sub and sub.get("last_status_message_id"):
+        try:
+            await message.bot.delete_message(chat_id, sub["last_status_message_id"])
+        except Exception:
+            pass
+
     status_text = await build_status_message()
-    await message.answer(status_text, reply_markup=get_status_inline_keyboard(), parse_mode="HTML")
+    sent_msg = await message.answer(status_text, reply_markup=get_status_inline_keyboard(), parse_mode="HTML")
+    await db.update_setting(chat_id, "last_status_message_id", sent_msg.message_id)
 
 @router.callback_query(F.data == "refresh_status")
 async def cb_refresh_status(call: CallbackQuery):
@@ -146,6 +159,23 @@ async def cb_refresh_status(call: CallbackQuery):
     except Exception:
         pass
     await call.answer("✅ Дані оновлено!")
+
+@router.callback_query(F.data == "pin_live_status")
+async def cb_pin_live_status(call: CallbackQuery):
+    chat_id = call.message.chat.id
+    status_text = await build_status_message()
+    sent_msg = await call.message.answer(
+        f"📌 <b>ЖИВИЙ СТАТУС (ОНОВЛЮЄТЬСЯ АВТОМАТИЧНО)</b>\n\n{status_text}",
+        reply_markup=get_status_inline_keyboard(),
+        parse_mode="HTML"
+    )
+    try:
+        await call.bot.pin_chat_message(chat_id, sent_msg.message_id, disable_notification=True)
+        await db.update_setting(chat_id, "pinned_message_id", sent_msg.message_id)
+        await call.answer("📌 Віджет закріплено зверху чату! Він оновлюватиметься автоматично.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Failed to pin message: {e}")
+        await call.answer("⚠️ Не вдалося закріпити повідомлення (перевірте дозволи чату).")
 
 @router.message(F.text.in_({"📅 Графік на сьогодні", "/today"}))
 @router.callback_query(F.data == "btn_today")
@@ -195,8 +225,8 @@ async def handle_tomorrow(event: Message | CallbackQuery):
         text = (
             f"📆 <b>Графік на завтра ({tomorrow_str})</b>\n\n"
             f"ℹ️ Графік на завтра ще <b>не оприлюднено</b> обленерго.\n"
-            f"Зазвичай графіки на наступний день публікуються в другій половині дня (після 18:00 - 20:00).\n\n"
-            f"Як тільки графік з'явиться — бот надішле вам сповіщення!"
+            f"Зазвичай графіки з'являються після 18:00 - 20:00.\n\n"
+            f"Як тільки він з'явиться — бот надішле сповіщення!"
         )
     else:
         text = ScheduleParser.format_schedule_text(tomorrow_sched, "завтра")
@@ -240,8 +270,8 @@ async def handle_settings(message: Message):
         sub = await db.get_subscriber(message.chat.id)
 
     text = (
-        "⚙️ <b>Налаштування сповіщень</b>\n\n"
-        "Натискайте на кнопки нижче, щоб увімкнути або вимкнути відповідні повідомлення:"
+        "⚙️ <b>Налаштування сповіщень та комфорту</b>\n\n"
+        "Натискайте кнопки нижче для налаштування під себе:"
     )
     await message.answer(text, reply_markup=get_settings_inline_keyboard(sub), parse_mode="HTML")
 
@@ -270,7 +300,6 @@ async def cb_cycle_warning(call: CallbackQuery):
         return
 
     curr_val = sub.get("notify_warning", 15)
-    # Cycle: 15 -> 30 -> 0 -> 15
     if curr_val == 15:
         new_val = 30
     elif curr_val == 30:
@@ -295,14 +324,15 @@ async def cb_close_settings(call: CallbackQuery):
 @router.message(F.text.in_({"ℹ️ Допомога", "/help"}))
 async def handle_help(message: Message):
     text = (
-        "📖 <b>Довідка по роботі бота:</b>\n\n"
-        "Бот працює автоматично 24/7 та перевіряє офіційний портал «Тернопільобленерго» (poweron.toe.com.ua).\n\n"
-        "<b>Команди:</b>\n"
-        "• 💡 <b>Поточний стан</b> — чи є світло просто зараз і коли наступне вимкнення\n"
-        "• 📅 <b>Графік на сьогодні</b> — повний розклад на добу\n"
-        "• 📆 <b>Графік на завтра</b> — розклад на наступний день (після його публікації)\n"
+        "📖 <b>Довідка по боту:</b>\n\n"
+        "Бот працює 24/7 у хмарі та щохвилини перевіряє офіційний портал «Тернопільобленерго» (poweron.toe.com.ua).\n\n"
+        "<b>Можливості:</b>\n"
+        "• 💡 <b>Поточний стан</b> — чи є світло зараз і коли наступне вимкнення\n"
+        "• 📅 <b>Графік на сьогодні</b> — розклад на добу\n"
+        "• 📆 <b>Графік на завтра</b> — розклад на наступний день\n"
         "• 🚨 <b>Аварійні роботи</b> — позапланові аварії та ремонти\n"
-        "• ⚙️ <b>Налаштування</b> — увімкнути/вимкнути окремі сповіщення\n\n"
+        "• ⚙️ <b>Налаштування</b> — нічний режим, ранковий дайджест, час попередження\n"
+        "• 📌 <b>Закріплений статус</b> — закріплює живе повідомлення у верхній частині чату\n\n"
         "🎯 <b>Адреса:</b> м. Бережани, вул. Героїв Майдану, буд. 2-А (Черга 2.1)"
     )
     await message.answer(text, reply_markup=get_main_reply_keyboard(), parse_mode="HTML")

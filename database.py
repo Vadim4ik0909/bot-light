@@ -21,6 +21,10 @@ class Database:
                     notify_restore INTEGER DEFAULT 1,
                     notify_warning INTEGER DEFAULT 15,
                     notify_schedule_change INTEGER DEFAULT 1,
+                    quiet_night INTEGER DEFAULT 1,
+                    daily_digest INTEGER DEFAULT 1,
+                    pinned_message_id INTEGER DEFAULT NULL,
+                    last_status_message_id INTEGER DEFAULT NULL,
                     is_active INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -32,8 +36,22 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+
+            # Run safe migrations for existing tables
+            migrations = [
+                ("quiet_night", "INTEGER DEFAULT 1"),
+                ("daily_digest", "INTEGER DEFAULT 1"),
+                ("pinned_message_id", "INTEGER DEFAULT NULL"),
+                ("last_status_message_id", "INTEGER DEFAULT NULL"),
+            ]
+            for col_name, col_type in migrations:
+                try:
+                    await db.execute(f"ALTER TABLE subscribers ADD COLUMN {col_name} {col_type};")
+                except Exception:
+                    pass  # column already exists
+
             await db.commit()
-        logger.info("Database initialized successfully.")
+        logger.info("Database initialized successfully with migrations.")
 
     async def add_subscriber(self, chat_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> bool:
         async with aiosqlite.connect(self.db_path) as db:
@@ -70,6 +88,10 @@ class Database:
             "notify_restore",
             "notify_warning",
             "notify_schedule_change",
+            "quiet_night",
+            "daily_digest",
+            "pinned_message_id",
+            "last_status_message_id",
             "is_active"
         }
         if key not in allowed_keys:

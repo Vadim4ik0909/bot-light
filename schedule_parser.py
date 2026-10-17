@@ -251,3 +251,48 @@ class ScheduleParser:
                 lines.append("")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def format_daily_digest(day_schedule: Dict[str, Any]) -> str:
+        """
+        Builds a compact morning overview for the daily digest.
+        """
+        times = day_schedule.get("times", {})
+        date_graph = day_schedule.get("dateGraph", "")
+        formatted_date = ""
+        if date_graph:
+            try:
+                d = datetime.fromisoformat(date_graph.replace("Z", "+00:00"))
+                formatted_date = d.strftime("%d.%m.%Y")
+            except Exception:
+                formatted_date = date_graph[:10]
+
+        intervals = ScheduleParser.get_intervals(times)
+        off_intervals = [i for i in intervals if i["status"] == STATUS_OFF]
+        maybe_intervals = [i for i in intervals if i["status"] == STATUS_MAYBE]
+
+        lines = [
+            f"☕️ <b>Доброго ранку! Графік на сьогодні ({formatted_date})</b>",
+            f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n"
+        ]
+
+        if not off_intervals and not maybe_intervals:
+            lines.append("🎉 <b>Сьогодні вимкнень не заплановано!</b> Світло буде весь день 🟢")
+        else:
+            if off_intervals:
+                lines.append("🔴 <b>Години відключень:</b>")
+                for i in off_intervals:
+                    dur_min = i["end_minutes"] - i["start_minutes"]
+                    dur_str = f"{dur_min//60} год" if dur_min % 60 == 0 else f"{dur_min//60} год {dur_min%60} хв"
+                    lines.append(f"  • <b>{i['start']} — {i['end']}</b> ({dur_str})")
+                lines.append("")
+
+            if maybe_intervals:
+                lines.append("🟡 <b>Можливі відключення:</b>")
+                for i in maybe_intervals:
+                    lines.append(f"  • {i['start']} — {i['end']}")
+                lines.append("")
+
+            lines.append("🟢 <i>У решту годин світло подається безперебійно. Гарного дня!</i>")
+
+        return "\n".join(lines)

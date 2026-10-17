@@ -1,3 +1,4 @@
+import urllib.parse
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -29,6 +30,9 @@ def get_status_inline_keyboard() -> InlineKeyboardMarkup:
     """
     Inline keyboard attached to status or schedule messages.
     """
+    share_text = "Бот відключень світла для нашого будинку (Бережани, вул. Героїв Майдану, 2-А) ⚡️"
+    share_url = f"https://t.me/share/url?url=https://t.me/light_metios_bot&text={urllib.parse.quote(share_text)}"
+
     keyboard = [
         [
             InlineKeyboardButton(text="🔄 Оновити зараз", callback_data="refresh_status"),
@@ -36,7 +40,10 @@ def get_status_inline_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="📆 Завтра", callback_data="btn_tomorrow"),
-            InlineKeyboardButton(text="🌐 Сайт обленерго", url="https://poweron.toe.com.ua/")
+            InlineKeyboardButton(text="📌 Закріпити статус", callback_data="pin_live_status")
+        ],
+        [
+            InlineKeyboardButton(text="👥 Поділитися з сусідом", url=share_url)
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -48,6 +55,8 @@ def get_settings_inline_keyboard(user_settings: dict) -> InlineKeyboardMarkup:
     notify_outage = "✅ Увімкнено" if user_settings.get("notify_outage", 1) else "❌ Вимкнено"
     notify_restore = "✅ Увімкнено" if user_settings.get("notify_restore", 1) else "❌ Вимкнено"
     notify_change = "✅ Увімкнено" if user_settings.get("notify_schedule_change", 1) else "❌ Вимкнено"
+    quiet_night = "🌙 Без звуку" if user_settings.get("quiet_night", 1) else "🔔 Зі звуком"
+    daily_digest = "✅ Увімкнено" if user_settings.get("daily_digest", 1) else "❌ Вимкнено"
 
     warning_mins = user_settings.get("notify_warning", 15)
     if warning_mins == 15:
@@ -78,9 +87,24 @@ def get_settings_inline_keyboard(user_settings: dict) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text=f"Попередження до вимкнення: {warn_text}",
+                text=f"Попередження: {warn_text}",
                 callback_data="cycle_notify_warning"
             )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Нічний режим (23-07): {quiet_night}",
+                callback_data="toggle_quiet_night"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Ранковий дайджест (08:00): {daily_digest}",
+                callback_data="toggle_daily_digest"
+            )
+        ],
+        [
+            InlineKeyboardButton(text="📌 Закріпити живий статус", callback_data="pin_live_status")
         ],
         [
             InlineKeyboardButton(text="🔙 Закрити налаштування", callback_data="close_settings")
