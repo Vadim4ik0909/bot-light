@@ -51,10 +51,15 @@ class Database:
                     pass  # column already exists
 
             # Disable daily_digest by default for existing subscribers who haven't explicitly set it
-            migration_done = await self.get_state("daily_digest_default_migrated")
-            if not migration_done:
+            async with db.execute("SELECT value FROM state WHERE key = 'daily_digest_default_migrated'") as cursor:
+                row = await cursor.fetchone()
+            if not row:
                 await db.execute("UPDATE subscribers SET daily_digest = 0;")
-                await self.set_state("daily_digest_default_migrated", "1")
+                await db.execute("""
+                    INSERT INTO state (key, value, updated_at)
+                    VALUES ('daily_digest_default_migrated', '1', CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET value = '1';
+                """)
 
             await db.commit()
         logger.info("Database initialized successfully with migrations.")
