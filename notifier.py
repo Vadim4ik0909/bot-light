@@ -14,9 +14,11 @@ from schedule_parser import (
     ScheduleParser,
     STATUS_ON,
     STATUS_OFF,
-    STATUS_MAYBE
+    STATUS_MAYBE,
+    format_duration
 )
 from database import db
+from keyboards import get_status_inline_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,7 @@ class NotifierService:
                         chat_id=sub["chat_id"],
                         message_id=pinned_id,
                         text=status_text,
+                        reply_markup=get_status_inline_keyboard(),
                         parse_mode="HTML"
                     )
                 except Exception:
@@ -89,7 +92,8 @@ class NotifierService:
         1. Checks schedule changes on poweron.toe.com.ua
         2. Checks transition events (outage started / power restored)
         3. Checks advance warnings (e.g. 15 min before outage)
-        4. Sends morning digest at 08:00
+        4. Updates live pinned messages
+        5. Sends morning digest at 08:00
         """
         tz = ZoneInfo(config.TIMEZONE)
         now = datetime.now(tz)
@@ -131,7 +135,7 @@ class NotifierService:
             schedule_text = ScheduleParser.format_schedule_text(today_sched, "сьогодні (ОНОВЛЕНО)")
             msg = (
                 "🔄 <b>Оновлено години відключень на сьогодні!</b>\n"
-                f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
                 f"{schedule_text}"
             )
             await self.broadcast(msg, filter_key="notify_schedule_change")
@@ -151,7 +155,7 @@ class NotifierService:
                     schedule_text = ScheduleParser.format_schedule_text(tomorrow_sched, "завтра (НОВИЙ)")
                     msg = (
                         "📆 <b>Оприлюднено графік відключень на завтра!</b>\n"
-                        f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                        f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
                         f"{schedule_text}"
                     )
                     await self.broadcast(msg, filter_key="notify_schedule_change")
@@ -163,7 +167,7 @@ class NotifierService:
                     schedule_text = ScheduleParser.format_schedule_text(tomorrow_sched, "завтра (ОНОВЛЕНО)")
                     msg = (
                         "🔄 <b>Оновлено графік відключень на завтра!</b>\n"
-                        f"📍 вул. {config.STREET_NAME}, {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                        f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
                         f"{schedule_text}"
                     )
                     await self.broadcast(msg, filter_key="notify_schedule_change")
@@ -185,13 +189,13 @@ class NotifierService:
             # A) Transition to OUTAGE (🔴 1)
             if current_status == STATUS_OFF:
                 end_time = curr_interval["end"] if curr_interval else "кінця інтервалу"
-                dur_min = (curr_interval["end_minutes"] - curr_interval["start_minutes"]) if curr_interval else 0
-                dur_str = f"на {dur_min//60} год" if dur_min % 60 == 0 else f"на {dur_min//60} год {dur_min%60} хв"
+                dur_str = format_duration(curr_interval["end_minutes"] - curr_interval["start_minutes"]) if curr_interval else ""
+                dur_suffix = f" (на {dur_str})" if dur_str else ""
 
                 msg = (
-                    f"🔴 <b>Світло вимкнено до {end_time}</b> ({dur_str})\n"
-                    f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
-                    f"⏳ Згідно з графіком, електроенергія буде відсутня до <b>{end_time}</b>."
+                    f"🔴 <b>Світло вимкнено до {end_time}</b>{dur_suffix}\n"
+                    f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
+                    f"💡 Орієнтовний час відновлення електроенергії — <b>{end_time}</b>."
                 )
                 await self.broadcast(msg, filter_key="notify_outage")
 
@@ -205,7 +209,7 @@ class NotifierService:
 
                 msg = (
                     f"🟢 <b>Світло увімкнено!</b>{next_outage_msg}\n"
-                    f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                    f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
                     f"💡 Електропостачання відновлено за графіком."
                 )
                 await self.broadcast(msg, filter_key="notify_restore")
@@ -214,9 +218,9 @@ class NotifierService:
             elif current_status == STATUS_MAYBE and last_status == STATUS_ON:
                 end_time = curr_interval["end"] if curr_interval else "кінця інтервалу"
                 msg = (
-                    f"🟡 <b>Період можливого відключення до {end_time}</b>\n"
-                    f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
-                    f"⚠️ З <b>{curr_interval['start']}</b> до <b>{end_time}</b> можливе відключення у разі перевищення лімітів."
+                    f"🟡 <b>Період можливого відключення (до {end_time})</b>\n"
+                    f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
+                    f"⚠️ До <b>{end_time}</b> можливе відключення у разі перевищення лімітів."
                 )
                 await self.broadcast(msg, filter_key="notify_outage")
 
@@ -246,7 +250,7 @@ class NotifierService:
                             
                             warning_msg = (
                                 f"{emoji} <b>Через {diff} хв {status_title} світла (до {inter['end']})</b>\n"
-                                f"📍 вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME} (Черга {config.CHER_GPV})\n\n"
+                                f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
                                 f"О <b>{inter['start']}</b> планується вимкнення до <b>{inter['end']}</b>.\n"
                                 f"🔌 <i>Встигніть зарядити пристрої та закінчити справи!</i>"
                             )
@@ -261,7 +265,13 @@ class NotifierService:
                             except Exception as e:
                                 logger.error(f"Failed to send warning to {sub['chat_id']}: {e}")
 
-        # --- 4. Morning Digest at 08:00 ---
+        # --- 4. Update Live Pinned Messages ---
+        tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV) if tomorrow_graph else None
+        live_status = ScheduleParser.format_status_message(today_sched, tomorrow_sched, now)
+        pinned_text = f"📌 <b>ЖИВИЙ СТАТУС (ОНОВЛЮЄТЬСЯ АВТОМАТИЧНО)</b>\n\n{live_status}"
+        await self.update_pinned_messages(pinned_text)
+
+        # --- 5. Morning Digest at 08:00 ---
         if now.hour == 8 and now.minute <= 2:
             digest_state_key = f"digest_sent_{today_str}"
             already_sent = await db.get_state(digest_state_key)

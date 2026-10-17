@@ -18,10 +18,27 @@ class Config:
     CITY_NAME: str = os.getenv("CITY_NAME", "Бережани")
     
     STREET_ID: int = int(os.getenv("STREET_ID", "1663"))
-    STREET_NAME: str = os.getenv("STREET_NAME", "вул. Героїв Майдану")
+    STREET_NAME: str = os.getenv("STREET_NAME", "Героїв Майдану")
     
     BUILDING_NAME: str = os.getenv("BUILDING_NAME", "2-А")
     CHER_GPV: str = os.getenv("CHER_GPV", "2.1")
+
+    @property
+    def clean_street(self) -> str:
+        s = self.STREET_NAME.strip()
+        if s.lower().startswith("вул."):
+            s = s[4:].strip()
+        elif s.lower().startswith("вул"):
+            s = s[3:].strip()
+        return s
+
+    @property
+    def short_address(self) -> str:
+        return f"вул. {self.clean_street}, {self.BUILDING_NAME}"
+
+    @property
+    def full_address(self) -> str:
+        return f"м. {self.CITY_NAME}, вул. {self.clean_street}, буд. {self.BUILDING_NAME}"
     
     DB_PATH: str = os.getenv("DB_PATH", "bot_data.db")
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Kyiv")

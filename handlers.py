@@ -30,6 +30,7 @@ async def build_status_message() -> str:
     tz = ZoneInfo(config.TIMEZONE)
     now = datetime.now(tz)
     today_str = now.strftime("%Y-%m-%d")
+    tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
     schedule_members = await api_client.get_schedule()
     if not schedule_members:
@@ -38,74 +39,22 @@ async def build_status_message() -> str:
             "Спробуйте натиснути кнопку «🔄 Оновити зараз» через хвилину."
         )
 
-    # Find today's schedule
     today_graph = None
+    tomorrow_graph = None
     for m in schedule_members:
-        if m.get("dateGraph", "").startswith(today_str):
+        date_g = m.get("dateGraph", "")
+        if date_g.startswith(today_str):
             today_graph = m
-            break
+        elif date_g.startswith(tomorrow_str):
+            tomorrow_graph = m
+
     if not today_graph and schedule_members:
         today_graph = schedule_members[0]
 
-    today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV)
-    if not today_sched:
-        return (
-            "ℹ️ <b>На сьогодні інформація про відключення відсутня.</b>\n"
-            "Світло має бути постійно 🟢"
-        )
+    today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV) if today_graph else None
+    tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV) if tomorrow_graph else None
 
-    times = today_sched.get("times", {})
-    status_info = ScheduleParser.get_current_status(times, now)
-
-    curr_interval = status_info["current_interval"]
-    next_interval = status_info["next_interval"]
-    curr_status = status_info["status"]
-
-    mins_left = status_info["minutes_remaining"]
-    hours_left = mins_left // 60
-    rem_mins = mins_left % 60
-    time_left_str = f"{hours_left} год {rem_mins} хв" if hours_left > 0 else f"{rem_mins} хв"
-
-    if curr_status == STATUS_OFF:
-        status_header = f"🔴 <b>СВІТЛА НЕМАЄ</b> (до {curr_interval['end']})"
-    elif curr_status == STATUS_MAYBE:
-        status_header = f"🟡 <b>МОЖЛИВЕ ВІДКЛЮЧЕННЯ</b> (до {curr_interval['end']})"
-    else:
-        status_header = "🟢 <b>СВІТЛО Є</b>"
-
-    interval_str = f"{curr_interval['start']} — {curr_interval['end']}" if curr_interval else "поточний час"
-
-    next_msg = ""
-    if next_interval:
-        next_label = next_interval["label"]
-        next_emoji = next_interval["emoji"]
-        next_msg = (
-            f"\n\n⏭ <b>Наступна зміна:</b>\n"
-            f"О <b>{next_interval['start']}</b>: {next_emoji} {next_label}\n"
-            f"⏳ Залишилось: <b>{time_left_str}</b>"
-        )
-    else:
-        next_msg = f"\n\nПоточний режим діє до <b>{curr_interval['end']}</b> (залишилось {time_left_str})."
-
-    # Overview of outages today
-    intervals = ScheduleParser.get_intervals(times)
-    off_intervals = [i for i in intervals if i["status"] == STATUS_OFF]
-    if off_intervals:
-        ranges = ", ".join([f"{i['start']}-{i['end']}" for i in off_intervals])
-        today_outages_summary = f"\n\n⚡️ <b>Вимкнення сьогодні:</b> <b>{ranges}</b>"
-    else:
-        today_outages_summary = "\n\n🎉 <i>Сьогодні вимкнень більше не заплановано!</i>"
-
-    msg = (
-        f"{status_header}\n\n"
-        f"📍 <b>Адреса:</b> вул. {config.STREET_NAME}, буд. {config.BUILDING_NAME}\n"
-        f"⚡️ <b>Черга:</b> {config.CHER_GPV}\n"
-        f"🕒 <b>Зараз:</b> {now.strftime('%H:%M')} (період {interval_str})"
-        f"{next_msg}"
-        f"{today_outages_summary}\n\n"
-        f"<i>Синхронізовано з poweron.toe.com.ua</i>"
-    )
-    return msg
+    return ScheduleParser.format_status_message(today_sched, tomorrow_sched, now)
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -119,14 +68,14 @@ async def cmd_start(message: Message):
     greeting = (
         f"👋 <b>Вітаю, {first_name}!</b>\n\n"
         f"Бот моніторить відключення та включення світла для:\n"
-        f"📍 <b>м. {config.CITY_NAME}, {config.STREET_NAME}, буд. {config.BUILDING_NAME}</b>\n"
+        f"📍 <b>{config.full_address}</b>\n"
         f"⚡️ <b>Черга ГПВ:</b> <b>{config.CHER_GPV}</b>\n\n"
         f"🔔 <b>Ви автоматично підписані на сповіщення:</b>\n"
         f"• 🔴 Початок вимкнення\n"
         f"• 🟢 Включення світла\n"
         f"• ⚠️ За 15 хв до відключення\n"
-        f"• 🌙 Тихий режим уночі (без звуку з 23:00 до 07:00)\n"
-        f"<i>(Ранкове зведення можна увімкнути в налаштуваннях)</i>\n\n"
+        f"• 🌙 Тихий режим уночі (без звуку з 23:00 до 07:00)\n\n"
+        f"<i>(Ранковий дайджест та час попередження можна налаштувати в меню)</i>\n\n"
         f"👇 Оберіть дію в меню:"
     )
 
@@ -222,11 +171,17 @@ async def handle_tomorrow(event: Message | CallbackQuery):
     tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV) if tomorrow_graph else None
 
     if not tomorrow_sched:
+        if now.hour < 17:
+            note = "Графік на завтра обленерго зазвичай оприлюднює ввечері (після 18:00 - 20:00)."
+        elif 17 <= now.hour <= 22:
+            note = "Обленерго ще готує графік на завтра. Як тільки він з'явиться — бот одразу надішле сповіщення!"
+        else:
+            note = "Графік на завтра наразі ще не оприлюднено обленерго. Бот надішле його одразу після публікації."
+
         text = (
-            f"📆 <b>Графік на завтра ({tomorrow_str})</b>\n\n"
-            f"ℹ️ Графік на завтра ще <b>не оприлюднено</b> обленерго.\n"
-            f"Зазвичай графіки з'являються після 18:00 - 20:00.\n\n"
-            f"Як тільки він з'явиться — бот надішле сповіщення!"
+            f"📆 <b>Графік на завтра ({tomorrow_str})</b>\n"
+            f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
+            f"ℹ️ {note}"
         )
     else:
         text = ScheduleParser.format_schedule_text(tomorrow_sched, "завтра")
@@ -244,11 +199,12 @@ async def handle_accidents(message: Message):
 
     lines = [
         f"🚨 <b>Аварійні та ремонтні роботи</b>",
-        f"📍 <b>Адреса:</b> м. {config.CITY_NAME}, {config.STREET_NAME}\n"
+        f"📍 <b>Адреса:</b> {config.full_address}\n"
     ]
 
     if not accidents and not planed:
-        lines.append("✅ <b>Аварійних чи планових ремонтних робіт за вашою адресою не зафіксовано.</b>")
+        lines.append("✅ <b>Аварійних або планових ремонтних робіт за вашою адресою не зафіксовано.</b>")
+        lines.append("Мережа працює в штатному режимі.")
     else:
         if accidents:
             lines.append("⚠️ <b>Аварійні відключення:</b>")
