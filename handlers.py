@@ -33,23 +33,15 @@ async def build_status_message() -> str:
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
     schedule_members = await api_client.get_schedule()
-    if not schedule_members:
-        return (
-            "⚠️ <b>Тимчасово не вдалося отримати дані з сайту обленерго.</b>\n\n"
-            "Спробуйте натиснути кнопку «🔄 Оновити зараз» через хвилину."
-        )
 
     today_graph = None
     tomorrow_graph = None
-    for m in schedule_members:
+    for m in (schedule_members or []):
         date_g = m.get("dateGraph", "")
         if date_g.startswith(today_str):
             today_graph = m
         elif date_g.startswith(tomorrow_str):
             tomorrow_graph = m
-
-    if not today_graph and schedule_members:
-        today_graph = schedule_members[0]
 
     today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV) if today_graph else None
     tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV) if tomorrow_graph else None
@@ -135,16 +127,23 @@ async def handle_today(event: Message | CallbackQuery):
 
     schedule_members = await api_client.get_schedule()
     today_graph = None
-    for m in schedule_members:
+    for m in (schedule_members or []):
         if m.get("dateGraph", "").startswith(today_str):
             today_graph = m
             break
-    if not today_graph and schedule_members:
-        today_graph = schedule_members[0]
 
     today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV) if today_graph else None
     if not today_sched:
-        text = "ℹ️ Графік на сьогодні ще не завантажено або відключень немає."
+        formatted_today = now.strftime("%d.%m.%Y")
+        text = (
+            f"ℹ️ <b>Офіційний графік на сьогодні ({formatted_today}) ще не оприлюднено обленерго.</b>\n"
+            f"📍 {config.short_address} (Черга {config.CHER_GPV})\n\n"
+            "⚠️ Якщо світло вимкнули прямо зараз, це може бути:\n"
+            "• <b>Аварійне відключення (ГАВ/СГАВ)</b> за командою диспетчера «Укренерго»\n"
+            "• <b>Позапланові ремонтні роботи</b> на лініях електромереж\n"
+            "• Затримка завантаження погодинного графіка на офіційному сервері\n\n"
+            "<i>Бот щохвилини перевіряє базу обленерго і сповістить, щойно графік з'явиться!</i>"
+        )
     else:
         text = ScheduleParser.format_schedule_text(today_sched, "сьогодні")
 

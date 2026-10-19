@@ -100,23 +100,46 @@ class NotifierService:
         today_str = now.strftime("%Y-%m-%d")
 
         schedule_members = await self.api.get_schedule()
-        if not schedule_members:
-            return
 
         # Find today's and tomorrow's graph
         today_graph = None
         tomorrow_graph = None
-        for m in schedule_members:
+        for m in (schedule_members or []):
             date_graph = m.get("dateGraph", "")
             if date_graph.startswith(today_str):
                 today_graph = m
             elif (now + timedelta(days=1)).strftime("%Y-%m-%d") in date_graph:
                 tomorrow_graph = m
 
-        if not today_graph and schedule_members:
-            today_graph = schedule_members[0]
+        today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV) if today_graph else None
+        tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV) if tomorrow_graph else None
 
-        today_sched = ScheduleParser.extract_day_schedule(today_graph, config.CHER_GPV)
+        # Check emergency accidents in background
+        try:
+            accidents = await self.api.get_accidents()
+            if accidents:
+                acc_hash = hashlib.md5(json.dumps(accidents, sort_keys=True).encode("utf-8")).hexdigest()
+                saved_acc_hash = await db.get_state(f"accidents_hash_{today_str}")
+                if saved_acc_hash != acc_hash:
+                    await db.set_state(f"accidents_hash_{today_str}", acc_hash)
+                    lines = [
+                        "🚨 <b>Увага! Зафіксовано аварійне відключення</b>",
+                        f"📍 {config.short_address}\n"
+                    ]
+                    for a in accidents:
+                        reason = a.get("reason", "Аварійна ситуація")
+                        end = a.get("dateEnd", "уточнюється")
+                        lines.append(f"• {reason} (до {end})")
+                    lines.append("\n⚠️ Електропостачання призупинено через аварію.")
+                    await self.broadcast("\n".join(lines), filter_key="notify_outage")
+        except Exception as e:
+            logger.error(f"Error checking accidents: {e}")
+
+        # Update live pinned messages ALWAYS
+        live_status = ScheduleParser.format_status_message(today_sched, tomorrow_sched, now)
+        pinned_text = f"📌 <b>ЖИВИЙ СТАТУС (ОНОВЛЮЄТЬСЯ АВТОМАТИЧНО)</b>\n\n{live_status}"
+        await self.update_pinned_messages(pinned_text)
+
         if not today_sched:
             return
 
@@ -265,13 +288,7 @@ class NotifierService:
                             except Exception as e:
                                 logger.error(f"Failed to send warning to {sub['chat_id']}: {e}")
 
-        # --- 4. Update Live Pinned Messages ---
-        tomorrow_sched = ScheduleParser.extract_day_schedule(tomorrow_graph, config.CHER_GPV) if tomorrow_graph else None
-        live_status = ScheduleParser.format_status_message(today_sched, tomorrow_sched, now)
-        pinned_text = f"📌 <b>ЖИВИЙ СТАТУС (ОНОВЛЮЄТЬСЯ АВТОМАТИЧНО)</b>\n\n{live_status}"
-        await self.update_pinned_messages(pinned_text)
-
-        # --- 5. Morning Digest at 08:00 ---
+        # --- 4. Morning Digest at 08:00 ---
         if now.hour == 8 and now.minute <= 2:
             digest_state_key = f"digest_sent_{today_str}"
             already_sent = await db.get_state(digest_state_key)
