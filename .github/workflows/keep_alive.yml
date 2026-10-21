@@ -1,0 +1,17 @@
+name: Keep Bot Awake
+
+on:
+  schedule:
+    # Run every 10 minutes
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping Render Web Service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send keep-alive HTTP GET
+        run: |
+          echo "Pinging https://bot-light-44ib.onrender.com/health..."
+          curl -s -f -m 30 "https://bot-light-44ib.onrender.com/health" || echo "Ping failed or timed out"

@@ -73,21 +73,22 @@ async def main():
     # Start notifier background task
     notifier_task = asyncio.create_task(notifier_service.start())
 
-    # Keep-alive background task: pings itself every 10 min to prevent Render Free Tier from sleeping
+    # Keep-alive background task: pings itself every 3 min to prevent Render Free Tier from sleeping
     async def keep_alive():
         service_url = os.getenv("RENDER_EXTERNAL_URL", "https://bot-light-44ib.onrender.com").rstrip("/")
         health_url = f"{service_url}/health"
         logger.info(f"Keep-alive self-ping configured for: {health_url}")
-        await asyncio.sleep(60)  # Wait 1 minute after initial boot
+        await asyncio.sleep(30)  # Wait 30s after initial boot
         import aiohttp
-        async with aiohttp.ClientSession() as session:
-            while True:
-                try:
-                    async with session.get(health_url, timeout=15) as resp:
+        while True:
+            try:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(health_url, headers={"User-Agent": "BotLight-KeepAlive/1.0"}) as resp:
                         logger.info(f"Keep-alive ping to {health_url}: status {resp.status}")
-                except Exception as e:
-                    logger.warning(f"Keep-alive ping error: {e}")
-                await asyncio.sleep(600)  # 10 minutes (Render timeout is 15 min)
+            except Exception as e:
+                logger.warning(f"Keep-alive ping error: {e}")
+            await asyncio.sleep(180)  # 3 minutes (Render sleeps after 15 min of inactivity)
 
     keep_alive_task = asyncio.create_task(keep_alive())
 
